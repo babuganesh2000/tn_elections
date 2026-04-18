@@ -1,0 +1,5 @@
+{
+  "mode": "wikipedia",
+  "description": "Wikipedia-derived constituency warehouse rebuilt from the Tamil Nadu Legislative Assembly list and constituency pages. Historical seat results and 2026 candidate lists come from Wikipedia pages; supporting demographics and swing tables remain locally modeled.",
+  "source": "https://en.wikipedia.org/wiki/List_of_constituencies_of_the_Tamil_Nadu_Legislative_Assembly"
+}

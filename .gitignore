@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.DS_Store
+Thumbs.db
+
+data/raw/
+
+# Keep generated parquet if you want reproducible deploys.
+# Uncomment the next line if you prefer runtime generation/import only.
+# data/parquet/
