@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.app_guard import stop_if_data_unverified
-from utils.db import get_connection, get_data_status, get_forecast_2026, get_swing_analysis
+from utils.db import get_connection, get_data_status, get_forecast_2026, get_swing_analysis, query
 from utils.ui import inject_enterprise_theme, render_demo_banner, render_sidebar_branding
 
 
@@ -219,6 +219,31 @@ model_projection = (
 model_map = {row["bloc_name"]: row["expected_seats"] for _, row in model_projection.iterrows()}
 polls_with_dmk = polls[polls["dmk_vote"].notna()]
 polls_with_tvk = polls[polls["tvk_vote"].notna()]
+
+OFFICIAL_SIR = {
+    "pre_sir_electors": 64114587,
+    "draft_after_enumeration": 54376756,
+    "final_roll_electors": 56707380,
+    "claims_period_additions": 2753000,
+    "claims_period_deletions": 423000,
+    "poll_day_electorate_rounded": 57300000,
+    "official_turnout_pct": 84.69,
+    "official_male_turnout_pct": 83.57,
+    "official_female_turnout_pct": 85.76,
+    "official_third_gender_turnout_pct": 60.49,
+}
+OFFICIAL_SIR["enumeration_net_reduction"] = (
+    OFFICIAL_SIR["pre_sir_electors"] - OFFICIAL_SIR["draft_after_enumeration"]
+)
+OFFICIAL_SIR["final_net_reduction"] = (
+    OFFICIAL_SIR["pre_sir_electors"] - OFFICIAL_SIR["final_roll_electors"]
+)
+OFFICIAL_SIR["final_net_reduction_pct"] = (
+    OFFICIAL_SIR["final_net_reduction"] / OFFICIAL_SIR["pre_sir_electors"] * 100
+)
+OFFICIAL_SIR["estimated_votes_polled"] = round(
+    OFFICIAL_SIR["poll_day_electorate_rounded"] * OFFICIAL_SIR["official_turnout_pct"] / 100
+)
 
 st.markdown('<div class="sec">Recent Polling Read · After 23 April Voting</div>', unsafe_allow_html=True)
 st.markdown(
@@ -439,6 +464,276 @@ st.dataframe(
         "NTK %": st.column_config.NumberColumn(format="%.2f"),
     },
 )
+
+st.markdown('<div class="sec">SIR vs Turnout Effect</div>', unsafe_allow_html=True)
+st.markdown(
+    f"""
+<div class="poll-note">
+This section separates two questions: did more people vote, or did turnout percentage rise because SIR cleaned the
+electoral-roll denominator? The official state-level SIR roll moved from
+<strong>{OFFICIAL_SIR["pre_sir_electors"]:,}</strong> electors before SIR to
+<strong>{OFFICIAL_SIR["final_roll_electors"]:,}</strong> in the final roll, a net reduction of
+<strong>{OFFICIAL_SIR["final_net_reduction_pct"]:.1f}%</strong>. The ECI poll-day release reported
+<strong>{OFFICIAL_SIR["official_turnout_pct"]:.2f}%</strong> provisional turnout.
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+sir_m1, sir_m2, sir_m3, sir_m4, sir_m5 = st.columns(5)
+with sir_m1:
+    st.metric("Pre-SIR Roll", f"{OFFICIAL_SIR['pre_sir_electors'] / 10_000_000:.2f} cr")
+with sir_m2:
+    st.metric("Draft After SIR", f"{OFFICIAL_SIR['draft_after_enumeration'] / 10_000_000:.2f} cr")
+with sir_m3:
+    st.metric("Final Roll", f"{OFFICIAL_SIR['final_roll_electors'] / 10_000_000:.2f} cr")
+with sir_m4:
+    st.metric("Net Roll Change", f"-{OFFICIAL_SIR['final_net_reduction_pct']:.1f}%")
+with sir_m5:
+    st.metric("Estimated Votes", f"{OFFICIAL_SIR['estimated_votes_polled'] / 10_000_000:.2f} cr")
+
+sir_left, sir_right = st.columns([1.05, 1])
+with sir_left:
+    fig_sir = go.Figure(
+        go.Waterfall(
+            name="SIR roll movement",
+            orientation="v",
+            measure=["absolute", "relative", "relative", "total"],
+            x=["Pre-SIR roll", "Enumeration cleanup", "Claims net add", "Final roll"],
+            y=[
+                OFFICIAL_SIR["pre_sir_electors"],
+                -OFFICIAL_SIR["enumeration_net_reduction"],
+                OFFICIAL_SIR["claims_period_additions"] - OFFICIAL_SIR["claims_period_deletions"],
+                OFFICIAL_SIR["final_roll_electors"],
+            ],
+            connector={"line": {"color": "#9dbbd6"}},
+            increasing={"marker": {"color": "#39c58d"}},
+            decreasing={"marker": {"color": "#ff6b6b"}},
+            totals={"marker": {"color": "#2a7fff"}},
+            text=[
+                f"{OFFICIAL_SIR['pre_sir_electors'] / 10_000_000:.2f} cr",
+                f"-{OFFICIAL_SIR['enumeration_net_reduction'] / 100000:.1f} lakh",
+                f"+{(OFFICIAL_SIR['claims_period_additions'] - OFFICIAL_SIR['claims_period_deletions']) / 100000:.1f} lakh",
+                f"{OFFICIAL_SIR['final_roll_electors'] / 10_000_000:.2f} cr",
+            ],
+            textposition="outside",
+        )
+    )
+    fig_sir.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font_color="#c8d8e8",
+        yaxis=dict(gridcolor="#102030", title="Electors"),
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=340,
+    )
+    st.plotly_chart(fig_sir, use_container_width=True)
+
+with sir_right:
+    st.markdown(
+        """
+<div class="callout">
+<h4>How to read the correlation</h4>
+If SIR reduction is high and turnout percentage rises, check whether actual votes polled rose too. A high
+percentage with flat votes polled is mostly a denominator effect. A high percentage with higher votes polled is
+real mobilisation plus roll cleanup.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+<div class="poll-note">
+Use constituency-level data where possible. District aggregation is useful for scanning, but AC-level analysis is
+better because SIR cleanup and turnout can vary sharply inside the same district.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+st.markdown('<div class="sec">Optional ECINET / CEO CSV Correlation</div>', unsafe_allow_html=True)
+st.markdown(
+    """
+<div class="poll-note">
+Upload a district or constituency CSV to compute the correlation directly. Expected columns:
+<strong>unit</strong>, <strong>electors_2021</strong>, <strong>votes_polled_2021</strong>,
+<strong>pre_sir_electors_2025</strong>, <strong>final_electors_2026</strong>,
+<strong>votes_polled_2026</strong>. Optional columns: <strong>region</strong>,
+<strong>turnout_pct_2021</strong>, <strong>turnout_pct_2026</strong>.
+</div>
+""",
+    unsafe_allow_html=True,
+)
+uploaded_sir = st.file_uploader("Upload SIR turnout CSV", type=["csv"], key="sir_turnout_csv")
+
+if uploaded_sir is not None:
+    sir_df = pd.read_csv(uploaded_sir)
+    sir_df.columns = [c.strip().lower() for c in sir_df.columns]
+    required_cols = {
+        "unit",
+        "electors_2021",
+        "votes_polled_2021",
+        "pre_sir_electors_2025",
+        "final_electors_2026",
+        "votes_polled_2026",
+    }
+    missing_cols = sorted(required_cols.difference(sir_df.columns))
+    if missing_cols:
+        st.error(f"Missing required columns: {', '.join(missing_cols)}")
+    else:
+        for col in required_cols.difference({"unit"}):
+            sir_df[col] = pd.to_numeric(sir_df[col], errors="coerce")
+        if "turnout_pct_2021" not in sir_df.columns:
+            sir_df["turnout_pct_2021"] = 100 * sir_df["votes_polled_2021"] / sir_df["electors_2021"]
+        if "turnout_pct_2026" not in sir_df.columns:
+            sir_df["turnout_pct_2026"] = 100 * sir_df["votes_polled_2026"] / sir_df["final_electors_2026"]
+        sir_df["sir_net_change_pct"] = (
+            100 * (sir_df["final_electors_2026"] - sir_df["pre_sir_electors_2025"])
+            / sir_df["pre_sir_electors_2025"]
+        )
+        sir_df["turnout_change_pp"] = sir_df["turnout_pct_2026"] - sir_df["turnout_pct_2021"]
+        sir_df["votes_polled_change_pct"] = (
+            100 * (sir_df["votes_polled_2026"] - sir_df["votes_polled_2021"])
+            / sir_df["votes_polled_2021"]
+        )
+        sir_df["electorate_change_pct"] = (
+            100 * (sir_df["final_electors_2026"] - sir_df["electors_2021"])
+            / sir_df["electors_2021"]
+        )
+        clean_sir = sir_df.dropna(
+            subset=["sir_net_change_pct", "turnout_change_pp", "votes_polled_change_pct"]
+        )
+        corr_turnout = clean_sir["sir_net_change_pct"].corr(clean_sir["turnout_change_pp"])
+        corr_votes = clean_sir["sir_net_change_pct"].corr(clean_sir["votes_polled_change_pct"])
+
+        cm1, cm2, cm3 = st.columns(3)
+        with cm1:
+            st.metric("Rows Analysed", f"{len(clean_sir):,}")
+        with cm2:
+            st.metric("SIR vs Turnout Corr", f"{corr_turnout:.2f}" if pd.notna(corr_turnout) else "N/A")
+        with cm3:
+            st.metric("SIR vs Votes Corr", f"{corr_votes:.2f}" if pd.notna(corr_votes) else "N/A")
+
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            fig_corr = go.Figure(
+                go.Scatter(
+                    x=clean_sir["sir_net_change_pct"],
+                    y=clean_sir["turnout_change_pp"],
+                    mode="markers",
+                    text=clean_sir["unit"],
+                    marker=dict(
+                        size=(clean_sir["final_electors_2026"] / clean_sir["final_electors_2026"].max() * 24) + 6,
+                        color="#2a7fff",
+                        opacity=0.72,
+                        line=dict(width=1, color="#c8d8e8"),
+                    ),
+                    hovertemplate="<b>%{text}</b><br>SIR net change: %{x:.2f}%<br>Turnout change: %{y:.2f} pp<extra></extra>",
+                )
+            )
+            fig_corr.add_hline(y=0, line_dash="dot", line_color="#9dbbd6")
+            fig_corr.add_vline(x=0, line_dash="dot", line_color="#9dbbd6")
+            fig_corr.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#c8d8e8",
+                xaxis=dict(gridcolor="#102030", title="SIR net roll change %"),
+                yaxis=dict(gridcolor="#102030", title="Turnout change, 2021 to 2026 (pp)"),
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=360,
+            )
+            st.plotly_chart(fig_corr, use_container_width=True)
+        with sc2:
+            fig_votes = go.Figure(
+                go.Scatter(
+                    x=clean_sir["sir_net_change_pct"],
+                    y=clean_sir["votes_polled_change_pct"],
+                    mode="markers",
+                    text=clean_sir["unit"],
+                    marker=dict(
+                        size=(clean_sir["final_electors_2026"] / clean_sir["final_electors_2026"].max() * 24) + 6,
+                        color="#39c58d",
+                        opacity=0.72,
+                        line=dict(width=1, color="#c8d8e8"),
+                    ),
+                    hovertemplate="<b>%{text}</b><br>SIR net change: %{x:.2f}%<br>Votes polled change: %{y:.2f}%<extra></extra>",
+                )
+            )
+            fig_votes.add_hline(y=0, line_dash="dot", line_color="#9dbbd6")
+            fig_votes.add_vline(x=0, line_dash="dot", line_color="#9dbbd6")
+            fig_votes.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#c8d8e8",
+                xaxis=dict(gridcolor="#102030", title="SIR net roll change %"),
+                yaxis=dict(gridcolor="#102030", title="Votes polled change, 2021 to 2026 %"),
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=360,
+            )
+            st.plotly_chart(fig_votes, use_container_width=True)
+
+        st.dataframe(
+            clean_sir[
+                [
+                    "unit",
+                    "sir_net_change_pct",
+                    "electorate_change_pct",
+                    "turnout_pct_2021",
+                    "turnout_pct_2026",
+                    "turnout_change_pp",
+                    "votes_polled_change_pct",
+                ]
+            ].sort_values("turnout_change_pp", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "sir_net_change_pct": st.column_config.NumberColumn("SIR Net Change %", format="%.2f"),
+                "electorate_change_pct": st.column_config.NumberColumn("Electorate Change %", format="%.2f"),
+                "turnout_pct_2021": st.column_config.NumberColumn("Turnout 2021 %", format="%.2f"),
+                "turnout_pct_2026": st.column_config.NumberColumn("Turnout 2026 %", format="%.2f"),
+                "turnout_change_pp": st.column_config.NumberColumn("Turnout Change pp", format="%.2f"),
+                "votes_polled_change_pct": st.column_config.NumberColumn("Votes Polled Change %", format="%.2f"),
+            },
+        )
+else:
+    model_electorate = query(
+        con,
+        """
+        SELECT dc.region,
+               SUM(CASE WHEN fv.election_year=2021 THEN fv.total_electors ELSE 0 END) AS electors_2021,
+               SUM(CASE WHEN fv.election_year=2026 THEN fv.total_electors ELSE 0 END) AS modeled_electors_2026,
+               AVG(CASE WHEN fv.election_year=2021 THEN fv.turnout_pct END) AS turnout_2021
+        FROM fact_voter_demographics fv
+        JOIN dim_constituency dc ON fv.constituency_id=dc.constituency_id
+        WHERE fv.election_year IN (2021, 2026)
+        GROUP BY dc.region
+        ORDER BY dc.region
+        """,
+    )
+    model_electorate["modeled_electorate_change_pct"] = (
+        100 * (model_electorate["modeled_electors_2026"] - model_electorate["electors_2021"])
+        / model_electorate["electors_2021"]
+    )
+    st.markdown(
+        """
+<div class="poll-note">
+No ECINET/CEO SIR CSV is loaded yet. The table below is only the app's modeled electorate baseline by region,
+not official SIR deletion data. Upload official AC or district data to activate the actual correlation charts.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        model_electorate,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "electors_2021": st.column_config.NumberColumn("Electors 2021", format="%d"),
+            "modeled_electors_2026": st.column_config.NumberColumn("Modeled Electors 2026", format="%d"),
+            "turnout_2021": st.column_config.NumberColumn("Turnout 2021 %", format="%.2f"),
+            "modeled_electorate_change_pct": st.column_config.NumberColumn("Modeled Electorate Change %", format="%.2f"),
+        },
+    )
 
 st.markdown('<div class="sec">Source Notes</div>', unsafe_allow_html=True)
 st.markdown(
